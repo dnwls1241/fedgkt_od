@@ -5,6 +5,7 @@ from torchvision.models.detection.backbone_utils import resnet_fpn_backbone, _va
 from torchvision.models.detection._utils import overwrite_eps
 from . import utils
 from torchvision.ops.focal_loss import sigmoid_focal_loss
+from torchvision.ops import boxes as box_ops
 from .utils import softmax_focal_loss
 
 from torch import nn, Tensor
@@ -19,9 +20,13 @@ class GKTHead(RetinaNetHead):
         self.classification_head = GKTClassificationHead(in_channels, num_anchors, num_classes)
         self.regression_head = GKTRegressionHead(in_channels, num_anchors)
         
-    def compute_loss(self, targets, head_outputs, anchors, matched_idxs, output_logits=None):
-        cls_logits = output_logits['cls_logits']
-        bbox_regression = output_logits['bbox_regression']
+    def compute_loss(self, targets, head_outputs, anchors, matched_idxs, input_logits=None):
+        if input_logits is not None:            
+            cls_logits = input_logits['cls_logits']
+            bbox_regression = input_logits['bbox_regression']
+        else:
+            cls_logits = None
+            bbox_regression = None
         return {
             'classification': self.classification_head.compute_loss(targets, head_outputs, matched_idxs, cls_logits),
             'bbox_regresstion': self.regression_head.compute_loss(targets, head_outputs, anchors, matched_idxs, bbox_regression)
@@ -39,7 +44,7 @@ class GKTClassificationHead(RetinaNetClassificationHead):
     def __init__(self, in_channels, num_anchors, num_classes):
         super().__init__(in_channels, num_anchors, num_classes)
         self.KL_Loss = utils.KL_Loss()
-    def compute_loss(self, targets, head_outputs, matched_idxs, output_logits=None):
+    def compute_loss(self, targets, head_outputs, matched_idxs, input_logits=None):
     #    # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor]) -> Tensor
         losses = []
 
@@ -62,8 +67,8 @@ class GKTClassificationHead(RetinaNetClassificationHead):
             valid_idxs_per_image = matched_idxs_per_image != self.BETWEEN_THRESHOLDS
 
             # compute the classification loss
-            if output_logits is not None:
-                dstil_logits_per_image = output_logits[idx]
+            if input_logits is not None:
+                dstil_logits_per_image = input_logits[idx]
                 losses.append(((sigmoid_focal_loss(
                     cls_logits_per_image[valid_idxs_per_image],
                     gt_classes_target[valid_idxs_per_image],
@@ -85,7 +90,7 @@ class GKTRegressionHead(RetinaNetRegressionHead):
     def __init__(self, in_channels, num_anchors):
         super().__init__(in_channels, num_anchors)
     
-    def compute_loss(self, targets, head_outputs, anchors, matched_idxs, output_logits=None):
+    def compute_loss(self, targets, head_outputs, anchors, matched_idxs, input_logits=None):
     #    # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor], List[Tensor]) -> Tensor
         losses = []
 
@@ -131,7 +136,7 @@ class GKTRetinaNet(RetinaNet):
                  is_server=False):
         if anchor_generator is None:
             anchor_generator = AnchorGenerator()
-        print(backbone.out_channels, anchor_generator.num_anchors_per_location()[0], num_classes)
+
         if head is None:
             head = GKTHead(backbone.out_channels, anchor_generator.num_anchors_per_location()[0], num_classes)
         super().__init__(backbone=backbone, num_classes=num_classes,
@@ -146,8 +151,21 @@ class GKTRetinaNet(RetinaNet):
                 topk_candidates=topk_candidates)
         self.is_server = is_server
 
+    def compute_loss(self, targets, head_outputs, anchors, input_logits=None):
+        matched_idxs = []
+        for anchors_per_image, targets_per_image in zip(anchors, targets):
+            if targets_per_image['boxes'].numel() == 0:
+                matched_idxs.append(torch.full((anchors_per_image.size(0),), -1, dtype=torch.int64,
+                                               device=anchors_per_image.device))
+                continue
+            false_boxes = targets_per_image['boxes'] < 0
+            targets_per_image['boxes'][false_boxes] = 0
+            match_quality_matrix = box_ops.box_iou(targets_per_image['boxes'], anchors_per_image)
+            matched_idxs.append(self.proposal_matcher(match_quality_matrix))
 
-    def forward(self, input, targets=None, intput_logits=None):
+        return self.head.compute_loss(targets, head_outputs, anchors, matched_idxs, input_logits)
+
+    def forward(self, input, targets=None, input_logits=None):
     #    # type: (List[Tensor], Optional[List[Dict[str, Tensor]]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
         """
         Args:
@@ -161,7 +179,8 @@ class GKTRetinaNet(RetinaNet):
                 like `scores`, `labels` and `mask` (for Mask R-CNN models).
 
         """
-        targets = {"boxes": targets[:, :, :-1], "labels": targets[:, :, -1]} 
+        # targets = [{"boxes": t[:, :-1], "labels": t[:, -1].type(torch.int64)} for t in targets] 
+        
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
 
@@ -227,7 +246,7 @@ class GKTRetinaNet(RetinaNet):
             assert targets is not None
 
             # compute the losses
-            losses = self.compute_loss(targets, head_outputs, anchors, intput_logits)
+            losses = self.compute_loss(targets, head_outputs, anchors, input_logits)
         else:
             # recover level sizes
             num_anchors_per_level = [x.size(2) * x.size(3) for x in features]
@@ -300,10 +319,10 @@ def gktclientmodel(backbone=None, pretrained=False, path=None, anchor_generator=
         # no need to download the backbone if pretrained is set
         pretrained_backbone = False
     # skip P2 because it generates too many anchors (according to their paper)
-    if backbone is None:
-        backbone = resnet_fpn_backbone(backbone_name=backbone, pretrained=pretrained_backbone, returned_layers=[2, 3, 4], trainable_layers=trainable_backbone_layers)
+    returned_layers=[2, 3, 4]
+    backbone = resnet_fpn_backbone(backbone_name=backbone, pretrained=pretrained_backbone, returned_layers=returned_layers, trainable_layers=trainable_backbone_layers)
+    anchor_generator = AnchorGenerator(sizes=tuple([(32, 64, 128) for _ in range(len(returned_layers)+1)]), aspect_ratios=tuple([(1.0, 2.0) for _ in range(len(returned_layers)+1)]))
     #head = RetinaNetHead(args.head_channels, anchor_generator.num_anchors_per_location()[0], num_classes)
-    print(backbone.out_channels)
     model = GKTRetinaNet(backbone, num_classes, anchor_generator=anchor_generator, **kwargs)
     if pretrained:
         model.load_state_dict(torch.load(path))
