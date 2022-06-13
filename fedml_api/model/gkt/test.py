@@ -40,7 +40,6 @@ def get_args_parser():
 
 def run(args):
     backbone = torchvision.models.mobilenet_v2(pretrained=True).features
-    backbone.out_channels = 1280
 
     # anchor_generator = AnchorGenerator(
     #     sizes = ((32, 64, 128, 256, 512),),

@@ -1,10 +1,11 @@
 import json
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import os
+import _pickle
+import psutil
 
 def get_state_dict(file):
     try:
@@ -112,17 +113,17 @@ class CE_Loss(nn.Module):
         return loss
 
 
-def save_dict_to_json(d, json_path):
-    """Saves dict of floats in json file
+def save_dict_to_pkl(d, pkl_path):
+    """Saves dict of floats in pkl file
 
     Args:
         d: (dict) of float-castable values (np.float, int, float, etc.)
-        json_path: (string) path to json file
+        pkl_path: (string) path to pkl file
     """
-    with open(json_path, 'w') as f:
-        # We need to convert the values to float for json (it doesn't accept np.array, np.float, )
+    with open(pkl_path, 'w') as f:
+        # We need to convert the values to float for pkl (it doesn't accept np.array, np.float, )
         d = {k: v for k, v in d.items()}
-        json.dump(d, f, indent=4)
+        _pickle.dump(d, f, indent=4)
 
 
 # Filter out batch norm parameters and remove them from weight decay - gets us higher accuracy 93.2 -> 93.48
@@ -145,3 +146,32 @@ def split_bn_params(model, model_params, master_params):
     mas_bn_params = [p_mast for p_mod, p_mast in zipped_params if p_mod in mod_bn_params]
     mas_rem_params = [p_mast for p_mod, p_mast in zipped_params if p_mod not in mod_bn_params]
     return mas_bn_params, mas_rem_params
+
+
+def save_client_result(round_idx, project_dir, client_id, batch_idx, client_result):
+    file_name = 'client{}_round{}_bat{}.pkl'.format(client_id, round_idx, batch_idx)
+    with open(os.path.join(project_dir, file_name), 'wb') as f:
+        _pickle.dump(client_result, f)
+
+def load_client_result(round_idx, project_dir, client_id, batch_idx):
+    file_name = 'client{}_round{}_bat{}.pkl'.format(client_id, round_idx, batch_idx)
+    with open(os.path.join(project_dir, file_name), 'rb') as f:
+        result = _pickle.load(f)
+        return result
+
+def save_server_logit(round_idx, project_dir, client_id, batch_idx, server_logit):
+    file_name = 'server_cl{}_round{}_bat{}.pkl'.format(client_id, round_idx, batch_idx)
+    with open(os.path.join(project_dir, file_name), 'wb') as f:
+        _pickle.dump(server_logit, f)
+
+def load_server_logit(round_idx, project_dir, client_id , batch_idx):
+    file_name = 'server_cl{}_round{}_bat{}.pkl'.format(client_id, round_idx, batch_idx)
+    with open(os.path.join(project_dir, file_name), 'rb') as f:
+        logit = _pickle.load(f)
+        return logit
+
+def memory_usage(message: str = 'debug'):
+    # current process RAM usage
+    p = psutil.Process()
+    rss = p.memory_info().rss / 2 ** 20 # Bytes to MB
+    print(f"[{message}] memory usage: {rss: 10.5f} MB")

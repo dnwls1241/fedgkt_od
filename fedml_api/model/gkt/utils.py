@@ -168,6 +168,7 @@ def softmax_focal_loss(
     alpha: float = 0.25,
     gamma: float = 2,
     reduction: str = "none",
+    temperature: float = 3.0
 ):
     """
     Original implementation from https://github.com/facebookresearch/fvcore/blob/master/fvcore/nn/focal_loss.py .
@@ -190,7 +191,8 @@ def softmax_focal_loss(
     Returns:
         Loss tensor with the reduction option applied.
     """
-    p = torch.softmax(inputs, dim=1)
+    p = torch.softmax(inputs/temperature, dim=1)
+    targets = torch.softmax(targets/temperature, dim=1)
     ce_loss = F.binary_cross_entropy_with_logits(
         inputs, targets, reduction="none"
     )
@@ -208,3 +210,16 @@ def softmax_focal_loss(
 
     return loss
 
+def kd_l2_loss(
+    student: torch.Tensor,
+    teacher: torch.Tensor,
+    targets: torch.Tensor,
+    margin: float = 0.0,
+    reduction: str = "sum",
+):
+    s = torch.nn.functional.mse_loss(student, targets, reduction=reduction)
+    t = torch.nn.functional.mse_loss(teacher, targets, reduction=reduction)
+    if s.sum() + margin > t.sum():
+        return s
+    else:
+        return torch.zeros_like(s)

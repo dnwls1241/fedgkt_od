@@ -11,26 +11,29 @@ import torch.utils.data
 import torchvision
 from pycocotools import mask as coco_mask
 
-import transforms as T
-
+from . import transforms as T
 
 class CocoDetection(torchvision.datasets.CocoDetection):
-    def __init__(self, root, dataidxs=None, transforms=None, download=False):
-        self.root = root
-        self.dataidxs = dataidxs
-        self.download = download
+    def __init__(self, img_folder, ann_file, transforms, dataidxs=None):
+        super(CocoDetection, self).__init__(img_folder, ann_file)
+        if dataidxs is not None:
+            self.ids = dataidxs
         self._transforms = transforms
-        from pycocotools.coco import COCO
-        self.img_folder, self.ann_file = coco_path(self.image_set, self.root)
-        super(CocoDetection, self).__init__(self.img_folder, self.ann_file)
-        self.ids = self.dataidxs[self.client_idx]
+        
 
     def __getitem__(self, idx):
         image_id = self.ids[idx]
-        img, target = super(CocoDetection, self).__getitem__(image_id)
+        img, target = super(CocoDetection, self).__getitem__(idx)
         target = {'image_id': image_id, 'annotations': target}
         if self._transforms is not None:
             img, target = self._transforms(img, target)
+        boxes, labels = [], []
+        for obj in target['annotations']:
+            boxes.append(obj['bbox'])
+            labels.append(obj['category_id'])
+        target = {}
+        target['boxes'] = torch.tensor(boxes)
+        target['labels'] = torch.tensor(labels)
         return img, target
 
 
@@ -66,8 +69,9 @@ def make_coco_transforms(image_set):
     raise ValueError(f'unknown {image_set}')
 
 
-def build(image_set, args):
-    root = Path(args.coco_path)
+def build(data_dir, dataidxs=None, train=True):
+    image_set = "train" if train is True else "val"
+    root = Path(data_dir)
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
     PATHS = {
@@ -76,23 +80,5 @@ def build(image_set, args):
     }
 
     img_folder, ann_file = PATHS[image_set]
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), dataidxs=args.dataidxs)
+    dataset = CocoDetection(img_folder, ann_file, transforms=None, dataidxs=dataidxs)
     return dataset
-
-
-def build_dataset(image_set, args):
-    if args.dataset_file == 'coco':
-        return build(image_set, args)
-    raise ValueError(f'dataset {args.dataset_file} not supported')
-
-def coco_path(image_set, root):
-    root = Path(root)
-    assert root.exists(), f'provided COCO path {root} does not exist'
-    mode = 'instances'
-    PATHS = {
-        "train": (root / "train2017", root / "annotations" / f'{mode}_train2017.json'),
-        "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
-    }
-
-    img_folder, ann_file = PATHS[image_set]
-    return img_folder, ann_file
