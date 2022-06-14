@@ -341,8 +341,9 @@ def gktservermodel(backbone=None, pretrained=False, path=None, anchor_generator=
     if backbone is None:
         backbone = resnet_fpn_backbone(backbone_name=backbone_name, pretrained=pretrained_backbone, returned_layers=[2, 3, 4], trainable_layers=trainable_backbone_layers)
     model = GKTRetinaNet(backbone, num_classes, anchor_generator=anchor_generator, is_server=True, **kwargs)
-    if pretrained:
+    if path is not None:
         model.load_state_dict(torch.load(path))
+        print('load model', path)
         overwrite_eps(model, 0.0)
     return model
 
@@ -361,7 +362,7 @@ def gktclientmodel(backbone=None, pretrained=False, path=None, anchor_generator=
     anchor_generator = AnchorGenerator(sizes=tuple([(64, 128, 256) for _ in range(len(returned_layers)+1)]), aspect_ratios=tuple([(1.0, 2.0) for _ in range(len(returned_layers)+1)]))
     #head = RetinaNetHead(args.head_channels, anchor_generator.num_anchors_per_location()[0], num_classes)
     model = GKTRetinaNet(backbone, num_classes, anchor_generator=anchor_generator, **kwargs)
-    if pretrained:
+    if path is not None:
         model.load_state_dict(torch.load(path))
         overwrite_eps(model, 0.0)
     return model

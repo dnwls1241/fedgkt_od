@@ -120,29 +120,29 @@ class GKTLocalTrainer(object):
         else:
             self.load_weight(self.round_idx)
         self.client_model.eval()
+        if self.args.client_make_logits==1:
+            for batch_idx, (images, labels) in enumerate(self.local_training_data):
+                # images, labels = images.to(self.device), labels.to(self.device)
 
-        for batch_idx, (images, labels) in enumerate(self.local_training_data):
-            # images, labels = images.to(self.device), labels.to(self.device)
+                # logging.info("shape = " + (str(i.shape) + " ") for i in images)
+                detections, log_probs, extracted_features = self.client_model(images)
 
-            # logging.info("shape = " + (str(i.shape) + " ") for i in images)
-            detections, log_probs, extracted_features = self.client_model(images)
-
-            # logging.info("shape = " + (str(p.shape) + " ") for p in extracted_features)
-            # logging.info("element size = " + (str(p.element_size()) + " ") for p in extracted_features)
-            # logging.info("nelement = " + (str(p.nelement())+ " ") for p in extracted_features)
-            # logging.info("GPU memory1 = " + (str(p.nelement() * p.element_size())+ " ") for p in extracted_features)
-            # extracted_features = [p.cpu().detach().numpy() for p in extracted_features]
-            logits_dict = {k: v.cpu().detach().numpy() for k, v in log_probs.items()}
-            # labels_dict = [{k: v.cpu().detach().numpy() for k, v in t.items()} for t in labels]
-            # train_result = {"features":extracted_features,
-            #                 "logits": logits_dict, 
-            #                 "labels": labels_dict}
-            if batch_idx%5 == 0: logging.info('round{} client{} train_batch[{}/{}] '.format(self.round_idx, self.client_id, batch_idx, len(self.local_training_data)))
-            save_client_result(self.round_idx, self.client_dir, self.client_id, batch_idx, logits_dict)
-            
-            del images, labels, extracted_features, logits_dict, log_probs
-            torch.cuda.empty_cache()
-        train_batch_num = batch_idx+1
+                # logging.info("shape = " + (str(p.shape) + " ") for p in extracted_features)
+                # logging.info("element size = " + (str(p.element_size()) + " ") for p in extracted_features)
+                # logging.info("nelement = " + (str(p.nelement())+ " ") for p in extracted_features)
+                # logging.info("GPU memory1 = " + (str(p.nelement() * p.element_size())+ " ") for p in extracted_features)
+                # extracted_features = [p.cpu().detach().numpy() for p in extracted_features]
+                logits_dict = {k: v.cpu().detach().numpy() for k, v in log_probs.items()}
+                # labels_dict = [{k: v.cpu().detach().numpy() for k, v in t.items()} for t in labels]
+                # train_result = {"features":extracted_features,
+                #                 "logits": logits_dict, 
+                #                 "labels": labels_dict}
+                if batch_idx%5 == 0: logging.info('round{} client{} train_batch[{}/{}] '.format(self.round_idx, self.client_id, batch_idx, len(self.local_training_data)))
+                save_client_result(self.round_idx, self.client_dir, self.client_id, batch_idx, logits_dict)
+                
+                del images, labels, extracted_features, logits_dict, log_probs
+                torch.cuda.empty_cache()
+            train_batch_num = batch_idx+1
         
         if self.eval==1:
             for batch_idx, (test_images, test_labels) in enumerate(self.local_test_data):

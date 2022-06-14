@@ -13,15 +13,15 @@ from pycocotools.cocoeval import COCOeval
 
 
 class GKTGlobalTrainer(object):
-    def __init__(self, args, data_map, test_data_idxs, last_epoch, model=None):
+    def __init__(self, args, round_idx, data_map, test_data_idxs, last_epoch, model=None):
         self.client_num = args.client_number
         self.device = args.device
         self.args = args
-        self.round_idx = args.resume_round
+        self.round_idx = round_idx
         self.project_dir = args.project_dir
         self.client_dir = self.project_dir+"/client"
         self.server_dir = self.project_dir+"/server"
-        self.last_epoch = args.last_server_epoch
+        self.last_epoch = last_epoch
         self.data_map = data_map
         self.test_data_idxs =  test_data_idxs
         self.eval = args.servermodel_eval
@@ -89,9 +89,12 @@ class GKTGlobalTrainer(object):
 
     #     self.flag_client_model_uploaded_dict[index] = True
 
-    def get_global_logits(self, client_index):
-        return self.server_logits_dict[client_index]
+    def set_round_idx(self, round_idx):
+        self.round_idx = round_idx
     
+    def get_round_idx(self, round_idx):
+        return self.round_idx
+
     def get_clients_batch_num(self, batch_num):
         self.clients_batch_num = batch_num
 
@@ -162,46 +165,15 @@ class GKTGlobalTrainer(object):
             
             wandb.log({"Train/Loss": train_metrics['train_loss'], "round":epoch+1, "epoch": round_idx + 1})
             if epoch == epochs - 1:
-                
-                self.make_logits_large_model()
+                if self.args.server_make_logits==1:
+                    self.make_logits_large_model()
                 print("server logit made")
                 shutil.rmtree(self.client_dir)
                 os.mkdir(self.client_dir)
                 if self.eval == 1:
                     test_metrics = self.eval_large_model_on_the_server()
                 print("server model eval")
-                # wandb.log({"Train/Loss": train_metrics['train_loss'], "epoch": round_idx + 1})
-                # wandb.log({"Train/AccTop1": train_metrics['train_accTop1'], "epoch": round_idx + 1})
-                # wandb.log({"Train/AccTop5": train_metrics['train_accTop5'], "epoch": round_idx + 1})
-
-                # Evaluate for one epoch on validation set
                 
-                # Find the best accTop1 model.
-                # test_acc = test_metrics['test_accTop1']
-
-                # wandb.log({"Test/Loss": test_metrics['test_loss'], "epoch": round_idx + 1})
-                # wandb.log({"Test/AccTop1": test_metrics['test_accTop1'], "epoch": round_idx + 1})
-                # wandb.log({"Test/AccTop5": test_metrics['test_accTop5'], "epoch": round_idx + 1})
-
-                # last_path = os.path.join('./checkpoint/last.pth')
-                # # Save latest model weights, optimizer and accuracy
-                # torch.save({'state_dict': self.model_global.state_dict(),
-                #             'optim_dict': self.optimizer.state_dict(),
-                #             'epoch': round_idx + 1,
-                #             'test_accTop1': test_metrics['test_accTop1'],
-                #             'test_accTop5': test_metrics['test_accTop5']}, last_path)
-
-                # # If best_eval, best_save_path
-                # is_best = test_acc >= self.best_acc
-                # if is_best:
-                #     logging.info("- Found better accuracy")
-                #     self.best_acc = test_acc
-                #     # Save best metrics in a json file in the model directory
-                #     test_metrics['epoch'] = round_idx + 1
-                #     utils.save_dict_to_json(test_metrics, os.path.join('./checkpoint/', "test_best_metrics.json"))
-
-                #     # Save model and optimizer
-                #     shutil.copyfile(last_path, os.path.join('./checkpoint/', 'best.pth'))
                 return epoch
 
     def train_large_model_on_the_server(self):
@@ -209,14 +181,11 @@ class GKTGlobalTrainer(object):
         self.model_global.train()
 
         loss_avg = utils.RunningAverage()
-        # accTop1_avg = utils.RunningAverage()
-        # accTop5_avg = utils.RunningAverage()
+        
         for client_id in range(self.client_num):
             train_dl, _ = get_dataloader_coco_v2(self.args, self.data_map[str(client_id)], self.test_data_idxs)
 
             for batch_index, (images, labels) in enumerate(train_dl):
-                
-                # logging.info("running: batch_index = %d, client_id = %d" % (batch_index, client_id))
                 
                 logits = {}
                 if self.args.whether_distill_on_the_server == 1:
@@ -237,18 +206,9 @@ class GKTGlobalTrainer(object):
                 loss_avg.update(losses.item())
                 del images, labels, logits
                 torch.cuda.empty_cache()
-            # Update average loss and accuracy
-            # metrics = utils.accuracy(output_logits, labels, topk=(1, 5))
-            # accTop1_avg.update(metrics[0].item())
-            # accTop5_avg.update(metrics[1].item())
-            
+           
             del train_dl
             torch.cuda.empty_cache()
-            # update the logits for each client
-            # Note that this must be running in the model.train() model,
-            # since the client will continue the iteration based on the server logits.
-            
-        # compute mean of all metrics in summary
         train_metrics = {'train_loss': loss_avg.value()}
 
         metrics_string = " ; ".join("{}: {:05.3f}".format(k, v) for k, v in train_metrics.items())
@@ -310,6 +270,26 @@ class GKTGlobalTrainer(object):
                     torch.cuda.empty_cache()
                 del train_dl
                 torch.cuda.empty_cache()
+    
+    def make_logits_large_model_one_client(self, client_id):
+        self.model_global.eval()
+        # loss_avg = utils.RunningAverage()
+        # accTop1_avg = utils.RunningAverage()
+        # accTop5_avg = utils.RunningAverage()
+        with torch.no_grad():
+            train_dl, _ = get_dataloader_coco_v2(self.args, self.data_map[str(client_id)], self.test_data_idxs)
+            for batch_index, (images, labels) in enumerate(train_dl):
+                losses, output_logits = self.model_global(images, labels, eval_loss=True)
+                output_logits = {k: v.cpu().detach().numpy() for k, v in output_logits.items()}
+                save_server_logit(self.round_idx, self.server_dir, client_id, batch_index, output_logits)
+                if batch_index%5 == 0:
+                    logging.info('Server infer logit: round {} client {} [{}/{}]\tLoss: {:.6f}'.format(
+                        self.round_idx, client_id, batch_index * len(images), len(train_dl.dataset), sum(loss for loss in losses.values())))
+
+                del labels, images, output_logits
+                torch.cuda.empty_cache()
+            del train_dl
+            torch.cuda.empty_cache()
 
     def save_weight(self, epoch):
         self.weight_path = self.weight_dir + "/server/round{}_epoch{}.pth".format(self.round_idx, epoch)

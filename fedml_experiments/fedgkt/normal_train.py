@@ -116,7 +116,7 @@ def add_args(parser):
     parser.add_argument('--multi_gpu_server', action='store_true')
     parser.add_argument('--test', action='store_true',
                         help='test mode, only run 1-2 epochs to test the bug of the program')
-    parser.add_argument('--server_make_logits', type=int, default=1)
+
     parser.add_argument('--gpu_num_per_server', type=int, default=8,
                         help='gpu_num_per_server')
     parser.add_argument('--last_server_epoch', type=int, default=0)
@@ -130,7 +130,10 @@ def add_args(parser):
 
 
 if __name__ == "__main__":
-    
+    # initialize distributed computing (MPI)
+    # comm, process_id, worker_number = FedML_init()
+
+    # parse python script input parameters
     parser = argparse.ArgumentParser()
     args = add_args(parser)
     logging.info(args)
@@ -149,29 +152,17 @@ if __name__ == "__main__":
     server_dir = args.project_dir+"/server"
     torch.autograd.set_detect_anomaly(True)
 
+    # local_trainer = GKTGlobalTrainer(args,0, dataidx_map, dataidxs_test, last_epoch)
+    # local_trainer.load_weight(0, last_epoch)
+    # local_trainer.make_logits_large_model_one_client(4)
     
     while round_idx < args.comm_round:
-        for client_id in range(args.client_number):
-            if os.path.exists(args.weight_dir + "/client/round{}_client{}.pth".format(round_idx, client_id)):
-                continue
-            dataidxs = dataidx_map[str(client_id)] 
-            train_dl, test_dl = get_dataloader_coco_v2(args, dataidxs, dataidxs_test)
-            local_trainer = GKTLocalTrainer(client_id, round_idx, train_dl, test_dl, args.device, args=args)
-            if round_idx > 0:
-                local_trainer.update_large_model_logits(round_idx)
-            elif round_idx == args.resume_round and client_id==0:
-                summary(local_trainer.client_model)
-            local_trainer.train()
-            del local_trainer, train_dl, test_dl
-            gc.collect()
-        shutil.rmtree(server_dir)
-        os.mkdir(server_dir)
-        global_trainer = GKTGlobalTrainer(args,round_idx, dataidx_map, dataidxs_test, last_epoch)
+        train_dl, test_dl = get_dataloader_coco_v2(args, dataidx_map["0"], dataidxs_test)
+        local_trainer = GKTLocalTrainer(0,round_idx, train_dl, test_dl, 0, args=args)
         if round_idx == args.resume_round:
-            summary(global_trainer.model_global)
-        epochs, _ = global_trainer.get_server_epoch_strategy2(round_idx) 
-        last_epoch = global_trainer.train_and_eval(round_idx, epochs)
-        del global_trainer
+            summary(local_trainer.client_model)
+        # local_trainer.get_clients_batch_num(batch_num_dict)
+        local_trainer.train()
         gc.collect()
         print("###round{} complete!###".format(round_idx))
         round_idx += 1

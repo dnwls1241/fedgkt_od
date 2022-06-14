@@ -3,7 +3,7 @@ import logging
 import os
 import socket
 import sys
-
+import tqdm
 import numpy as np
 import shutil
 import setproctitle
@@ -16,9 +16,11 @@ from torchinfo import summary
 sys.path.insert(0, os.path.abspath(os.path.join(os.getcwd(), "../../")))
 from fedml_api.distributed.fedgkt.GKTGlobalTrainer import GKTGlobalTrainer
 from fedml_api.distributed.fedgkt.GKTLocalTrainer import GKTLocalTrainer
+from fedml_api.model.gkt.GKTRetinanet import gktservermodel, gktclientmodel
 from fedml_api.data_preprocessing.coco.data_loader import init_distirbuted_data, get_dataloader_coco_v2, init_distirbuted_data_test
-
-
+from fedml_api.detection.engine import evaluate
+from fedml_api.detection.coco_utils import CocoDetection
+from fedml_api.utils import utils_ObjectDetection as utils
 def add_args(parser):
     """
     parser : argparse.ArgumentParser
@@ -116,7 +118,6 @@ def add_args(parser):
     parser.add_argument('--multi_gpu_server', action='store_true')
     parser.add_argument('--test', action='store_true',
                         help='test mode, only run 1-2 epochs to test the bug of the program')
-    parser.add_argument('--server_make_logits', type=int, default=1)
     parser.add_argument('--gpu_num_per_server', type=int, default=8,
                         help='gpu_num_per_server')
     parser.add_argument('--last_server_epoch', type=int, default=0)
@@ -127,10 +128,28 @@ def add_args(parser):
     args = parser.parse_args()
     return args
 
+def make_prediction(model, img, threshold):
+    model.eval()
+    preds, _, _ = model(img)
+    for id in range(len(preds)) :
+        idx_list = []
 
+        for idx, score in enumerate(preds[id]['scores']) :
+            if score > threshold : #threshold 넘는 idx 구함
+                idx_list.append(idx)
+
+        preds[id]['boxes'] = preds[id]['boxes'][idx_list]
+        preds[id]['labels'] = preds[id]['labels'][idx_list]
+        preds[id]['scores'] = preds[id]['scores'][idx_list]
+
+
+    return preds
 
 if __name__ == "__main__":
-    
+    # initialize distributed computing (MPI)
+    # comm, process_id, worker_number = FedML_init()
+
+    # parse python script input parameters
     parser = argparse.ArgumentParser()
     args = add_args(parser)
     logging.info(args)
@@ -140,40 +159,50 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(0)
     
 
-    wandb.init(project="[Fedgkt Object Detection]", entity="ddojackin")
+    # wandb.init(project="[Fedgkt Object Detection]", entity="ddojackin")
 
-    dataidx_map = init_distirbuted_data(args)
+    dataidxs = init_distirbuted_data(args)["0"]
     dataidxs_test = init_distirbuted_data_test(args)["0"]
     round_idx = args.resume_round
     last_epoch = args.last_server_epoch
     server_dir = args.project_dir+"/server"
     torch.autograd.set_detect_anomaly(True)
-
+    weight_path = args.weight_dir+"/client/round4_client0.pth"
     
-    while round_idx < args.comm_round:
-        for client_id in range(args.client_number):
-            if os.path.exists(args.weight_dir + "/client/round{}_client{}.pth".format(round_idx, client_id)):
-                continue
-            dataidxs = dataidx_map[str(client_id)] 
-            train_dl, test_dl = get_dataloader_coco_v2(args, dataidxs, dataidxs_test)
-            local_trainer = GKTLocalTrainer(client_id, round_idx, train_dl, test_dl, args.device, args=args)
-            if round_idx > 0:
-                local_trainer.update_large_model_logits(round_idx)
-            elif round_idx == args.resume_round and client_id==0:
-                summary(local_trainer.client_model)
-            local_trainer.train()
-            del local_trainer, train_dl, test_dl
-            gc.collect()
-        shutil.rmtree(server_dir)
-        os.mkdir(server_dir)
-        global_trainer = GKTGlobalTrainer(args,round_idx, dataidx_map, dataidxs_test, last_epoch)
-        if round_idx == args.resume_round:
-            summary(global_trainer.model_global)
-        epochs, _ = global_trainer.get_server_epoch_strategy2(round_idx) 
-        last_epoch = global_trainer.train_and_eval(round_idx, epochs)
-        del global_trainer
-        gc.collect()
-        print("###round{} complete!###".format(round_idx))
-        round_idx += 1
-    print("every training completed!")
-        
+    # model =  gktservermodel(pretrained=args.pretrained, path=weight_path,
+    #                                         num_classes=args.num_classes, backbone_name=args.backbone_name, server_chan=args.server_chan)
+    model =  gktclientmodel(pretrained=args.pretrained, path=weight_path,
+                                            num_classes=args.num_classes, backbone_name=args.backbone_name)
+    model.to(args.device)
+    model.eval()
+
+    test_data_loader, _ = get_dataloader_coco_v2(args, dataidxs, dataidxs_test)
+    labels = []
+    preds_adj_all = []
+    annot_all = []
+
+    for im, annot in test_data_loader:
+        im = list(img.to(args.device) for img in im)
+        annot = [{k: v.to(torch.device('cpu')) for k, v in t.items()} for t in annot]
+
+        for t in annot:
+            labels += t['labels']
+
+        with torch.no_grad():
+            preds_adj = make_prediction(model, im, 0.4)
+            preds_adj = [{k: v.to(torch.device('cpu')) for k, v in t.items()} for t in preds_adj]
+            preds_adj_all.append(preds_adj)
+            annot_all.append(annot)
+
+    sample_metrics = []
+    for batch_i in range(len(preds_adj_all)):
+        sample_metrics += utils.get_batch_statistics(preds_adj_all[batch_i], annot_all[batch_i], iou_threshold=0.5) 
+
+    true_positives, pred_scores, pred_labels = [torch.cat(x, 0) for x in list(zip(*sample_metrics))]  # 배치가 전부 합쳐짐
+    precision, recall, AP, f1, ap_class = utils.ap_per_class(true_positives, pred_scores, pred_labels, torch.tensor(labels))
+    mAP = torch.mean(AP)
+    print(f'mAP : {mAP}')
+    print(f'AP : {AP}')
+
+    print("every eval completed!")
+
