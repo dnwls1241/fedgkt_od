@@ -1,1 +1,0 @@
-[{'boxes': tensor([], size=(0, 4), grad_fn=<StackBackward>), 'scores': tensor([], grad_fn=<IndexBackward>), 'labels': tensor([], dtype=torch.int64)}, {'boxes': tensor([], size=(0, 4), grad_fn=<StackBackward>), 'scores': tensor([], grad_fn=<IndexBackward>), 'labels': tensor([], dtype=torch.int64)}]
