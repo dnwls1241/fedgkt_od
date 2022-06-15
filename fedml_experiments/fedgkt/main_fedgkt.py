@@ -116,7 +116,6 @@ def add_args(parser):
     parser.add_argument('--multi_gpu_server', action='store_true')
     parser.add_argument('--test', action='store_true',
                         help='test mode, only run 1-2 epochs to test the bug of the program')
-    parser.add_argument('--server_make_logits', type=int, default=1)
     parser.add_argument('--gpu_num_per_server', type=int, default=8,
                         help='gpu_num_per_server')
     parser.add_argument('--last_server_epoch', type=int, default=0)
@@ -130,7 +129,7 @@ def add_args(parser):
 
 
 if __name__ == "__main__":
-    
+
     parser = argparse.ArgumentParser()
     args = add_args(parser)
     logging.info(args)

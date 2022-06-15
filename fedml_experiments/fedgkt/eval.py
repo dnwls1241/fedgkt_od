@@ -18,8 +18,6 @@ from fedml_api.distributed.fedgkt.GKTGlobalTrainer import GKTGlobalTrainer
 from fedml_api.distributed.fedgkt.GKTLocalTrainer import GKTLocalTrainer
 from fedml_api.model.gkt.GKTRetinanet import gktservermodel, gktclientmodel
 from fedml_api.data_preprocessing.coco.data_loader import init_distirbuted_data, get_dataloader_coco_v2, init_distirbuted_data_test
-from fedml_api.detection.engine import evaluate
-from fedml_api.detection.coco_utils import CocoDetection
 from fedml_api.utils import utils_ObjectDetection as utils
 def add_args(parser):
     """
@@ -130,7 +128,7 @@ def add_args(parser):
 
 def make_prediction(model, img, threshold):
     model.eval()
-    preds, _, _ = model(img)
+    preds, _ = model(img)
     for id in range(len(preds)) :
         idx_list = []
 
@@ -161,18 +159,18 @@ if __name__ == "__main__":
 
     # wandb.init(project="[Fedgkt Object Detection]", entity="ddojackin")
 
-    dataidxs = init_distirbuted_data(args)["0"]
+    dataidxs = init_distirbuted_data(args)["4"]
     dataidxs_test = init_distirbuted_data_test(args)["0"]
     round_idx = args.resume_round
     last_epoch = args.last_server_epoch
     server_dir = args.project_dir+"/server"
     torch.autograd.set_detect_anomaly(True)
-    weight_path = args.weight_dir+"/client/round4_client0.pth"
+    weight_path = args.weight_dir+"/server/round4_epoch4.pth"
     
-    # model =  gktservermodel(pretrained=args.pretrained, path=weight_path,
-    #                                         num_classes=args.num_classes, backbone_name=args.backbone_name, server_chan=args.server_chan)
-    model =  gktclientmodel(pretrained=args.pretrained, path=weight_path,
-                                            num_classes=args.num_classes, backbone_name=args.backbone_name)
+    model =  gktservermodel(pretrained=args.pretrained, path=weight_path,
+                                            num_classes=args.num_classes, backbone_name=args.backbone_name, server_chan=args.server_chan)
+    # model =  gktclientmodel(pretrained=args.pretrained, path=weight_path,
+    #                                         num_classes=args.num_classes, backbone_name=args.backbone_name)
     model.to(args.device)
     model.eval()
 
